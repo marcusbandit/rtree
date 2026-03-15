@@ -1,0 +1,111 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            deb: true
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            deb: true
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            deb: false
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            deb: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (aarch64 Linux)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Set linker for aarch64
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          mkdir -p .cargo
+          echo '[target.aarch64-unknown-linux-gnu]' >> .cargo/config.toml
+          echo 'linker = "aarch64-linux-gnu-gcc"' >> .cargo/config.toml
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Generate completions
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          mkdir -p completions
+          ./target/${{ matrix.target }}/release/rtree --generate-completions bash > completions/rtree.bash
+          ./target/${{ matrix.target }}/release/rtree --generate-completions zsh  > completions/_rtree
+          ./target/${{ matrix.target }}/release/rtree --generate-completions fish > completions/rtree.fish
+
+      - name: Build .deb
+        if: matrix.deb
+        run: |
+          cargo install cargo-deb --locked
+          mkdir -p completions
+          ./target/${{ matrix.target }}/release/rtree --generate-completions bash > completions/rtree.bash
+          ./target/${{ matrix.target }}/release/rtree --generate-completions zsh  > completions/_rtree
+          ./target/${{ matrix.target }}/release/rtree --generate-completions fish > completions/rtree.fish
+          cargo deb --no-build --target ${{ matrix.target }}
+
+      - name: Rename binary
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          src="target/${{ matrix.target }}/release/rtree"
+          dst="rtree-${version}-${{ matrix.target }}"
+          cp "$src" "$dst"
+          echo "ASSET=$dst" >> $GITHUB_ENV
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ASSET }}
+          path: ${{ env.ASSET }}
+
+      - name: Upload .deb
+        if: matrix.deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.target }}
+          path: target/${{ matrix.target }}/debian/*.deb
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**
+          generate_release_notes: true
