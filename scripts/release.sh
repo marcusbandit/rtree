@@ -52,10 +52,16 @@ case "$CHOICE" in
         PKGBUILD_ONLY=false
         ;;
     4)
-        read -rp "Enter version (e.g. 0.2.0): " NEW_VER
-        NEW_VER="${NEW_VER#v}"
-        read -rp "pkgrel [1]: " NEW_REL
-        NEW_REL="${NEW_REL:-1}"
+        read -rp "Enter version (e.g. 0.2.0 or 0.2.0-1): " INPUT
+        INPUT="${INPUT#v}"
+        if [[ "$INPUT" == *-* ]]; then
+            NEW_VER="${INPUT%-*}"
+            NEW_REL="${INPUT##*-}"
+        else
+            NEW_VER="$INPUT"
+            read -rp "pkgrel [1]: " NEW_REL
+            NEW_REL="${NEW_REL:-1}"
+        fi
         PKGBUILD_ONLY=false
         ;;
     *)
