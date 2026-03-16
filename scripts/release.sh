@@ -40,7 +40,13 @@ case "$CHOICE" in
     0)
         NEW_VER="$CARGO_VER"
         NEW_REL="$PKGREL"
-        PKGBUILD_ONLY=false
+        echo ""
+        read -rp "Full release (tag + binaries)? [y/N]: " FULL
+        if [[ "$FULL" =~ ^[Yy]$ ]]; then
+            PKGBUILD_ONLY=false
+        else
+            PKGBUILD_ONLY=true
+        fi
         ;;
     1)
         NEW_VER="$PATCH_VER"
