@@ -8,6 +8,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use clap::{CommandFactory, Parser, ValueEnum};
 use clap_complete::{generate, Shell};
+use regex::Regex;
 
 mod tui;
 
@@ -172,6 +173,7 @@ pub struct WalkOpts {
     pub date: bool,
     pub use_ctime: bool,
     pub prune: bool,
+    pub match_dirs: bool,
     pub ignore: Option<String>,
     pub sort: SortBy,
     pub reverse: bool,
@@ -207,6 +209,7 @@ impl WalkOpts {
             date: args.date,
             use_ctime: args.change_sort,
             prune: args.prune,
+            match_dirs: args.pattern.as_deref().map_or(false, |p| p.ends_with('/')),
             ignore: args.ignore.clone(),
             sort,
             reverse: args.reverse,
@@ -652,21 +655,22 @@ fn stream_node(
 // Returns (produced, size, lines_printed_by_this_call).
 
 fn stream_filtered(
-    path: &Path, pattern: &str, all_files_visible: bool,
+    path: &Path, pattern: &Regex, all_files_visible: bool,
     opts: &WalkOpts,
     prefix: &str, is_last: bool, depth: usize,
     force_show: bool,
     counters: &mut Counters, pending: &mut Vec<String>, tty: bool,
 ) -> (bool, u64, usize) {
     let name = node_name(path);
-    let name_matches = !pattern.is_empty() && name.to_lowercase().contains(&pattern.to_lowercase());
+    let is_dir = is_dir_entry(path, opts.follow_links);
+    let name_matches = (!opts.match_dirs || is_dir) && pattern.is_match(&name);
     let show = force_show || name_matches;
 
     let conn   = connector(prefix, is_last, depth);
     let indent = child_indent(prefix, is_last, depth);
 
     // ── File ──────────────────────────────────────────────────────────────────
-    if !is_dir_entry(path, opts.follow_links) {
+    if !is_dir {
         let file_visible = show || all_files_visible;
         if !file_visible { return (false, 0, 0); }
         let sz = path.metadata().map(|m| m.len()).unwrap_or(0);
@@ -678,7 +682,6 @@ fn stream_filtered(
     }
 
     // ── Directory ─────────────────────────────────────────────────────────────
-    let subtree_force = force_show || name_matches;
     let can_descend = opts.max_depth.map_or(true, |m| depth < m);
 
     if show && !opts.prune {
@@ -692,15 +695,31 @@ fn stream_filtered(
         if can_descend {
             let children = read_children(path, opts);
             let n = children.len();
-            let mut inner: Vec<String> = Vec::new();
-            for (i, child) in children.iter().enumerate() {
-                let (_, sz, lines) = stream_filtered(
-                    child, pattern, all_files_visible, opts,
-                    &indent, i == n - 1, depth + 1, subtree_force,
-                    counters, &mut inner, tty,
-                );
-                total_sz += sz;
-                child_lines += lines;
+
+            if opts.match_dirs && name_matches {
+                // This dir matched — show its immediate children only, don't recurse
+                for (i, child) in children.iter().enumerate() {
+                    let child_conn = connector(&indent, i == n - 1, depth + 1);
+                    let sz = child.metadata().map(|m| m.len()).unwrap_or(0);
+                    println!("{}", format_line(&child, &child_conn, opts.size.then_some(sz), opts));
+                    if !is_dir_entry(&child, opts.follow_links) { counters.files += 1; }
+                    else { counters.dirs += 1; }
+                    child_lines += 1;
+                    total_sz += sz;
+                }
+            } else {
+                // Normal: recurse, passing force_show down for ancestors of a match
+                let subtree_force = force_show || name_matches;
+                let mut inner: Vec<String> = Vec::new();
+                for (i, child) in children.iter().enumerate() {
+                    let (_, sz, lines) = stream_filtered(
+                        child, pattern, all_files_visible, opts,
+                        &indent, i == n - 1, depth + 1, subtree_force,
+                        counters, &mut inner, tty,
+                    );
+                    total_sz += sz;
+                    child_lines += lines;
+                }
             }
         }
         if opts.size && tty {
@@ -741,6 +760,8 @@ fn stream_filtered(
 // ── Plain mode entry ──────────────────────────────────────────────────────────
 
 fn print_plain(root: &Path, opts: &WalkOpts, pattern: Option<&str>) {
+    // Strip trailing slash — it's the folder-search signal, not part of the pattern
+    let pattern = pattern.map(|p| p.trim_end_matches('/'));
     let tty = io::stdout().is_terminal();
     let mut counters = Counters { files: 0, dirs: 0 };
 
@@ -756,12 +777,19 @@ fn print_plain(root: &Path, opts: &WalkOpts, pattern: Option<&str>) {
         let use_filter = pattern.is_some() || opts.prune;
 
         if use_filter {
-            let pat = pattern.unwrap_or("");
+            let pat_str = pattern.unwrap_or("");
+            let pat = match Regex::new(pat_str) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("rtree: invalid regex '{}': {}", pat_str, e);
+                    std::process::exit(1);
+                }
+            };
             let all_files = opts.prune && pattern.is_none();
             let mut pending: Vec<String> = Vec::new();
             for (i, child) in children.iter().enumerate() {
                 let (_, sz, lines) = stream_filtered(
-                    child, pat, all_files, opts,
+                    child, &pat, all_files, opts,
                     "", i == n - 1, 1, false,
                     &mut counters, &mut pending, tty,
                 );
