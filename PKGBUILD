@@ -8,7 +8,7 @@ url="https://github.com/marcusbandit/rtree"
 license=('MIT')
 makedepends=('cargo')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/marcusbandit/$pkgname/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('23b7791d6bf2e5b7dc2ab6a641f506ef3d95d910a7b3d55262ec6a1b8adc9b42')
 
 prepare() {
   cd "$pkgname-$pkgver"
