@@ -1,15 +1,20 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io::{self, Write as IoWrite};
 use std::io::IsTerminal;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, UNIX_EPOCH};
 
 use clap::{CommandFactory, Parser, ValueEnum};
 use clap_complete::{generate, Shell};
+use rayon::prelude::*;
 use regex::Regex;
 
+mod icons;
 mod tui;
 
 // ── Color mode ────────────────────────────────────────────────────────────────
@@ -33,7 +38,8 @@ pub enum ColorMode {
     name = "rtree",
     about = "A fast, colorful tree with live-search TUI.\n\n\
              Default: streams DFS output to stdout.\n\
-             Use --tui for the interactive search interface."
+             Use --tui for the interactive search interface.",
+    disable_help_flag = true,
 )]
 struct Args {
     /// Directory to display (default: current directory)
@@ -69,6 +75,10 @@ struct Args {
     /// List only files/dirs whose name contains PATTERN (case-insensitive)
     #[arg(short = 'P', long = "pattern", value_name = "PATTERN")]
     pattern: Option<String>,
+
+    /// Stop after N pattern matches (requires -P)
+    #[arg(short = 'm', long = "max-matches", value_name = "N")]
+    max_matches: Option<usize>,
 
     /// Do NOT list files/dirs whose name contains PATTERN (case-insensitive)
     #[arg(short = 'I', long = "ignore", value_name = "PATTERN")]
@@ -109,7 +119,7 @@ struct Args {
     size: bool,
 
     /// Human-readable sizes (implies -s)
-    #[arg(short = 'H', long = "human")]
+    #[arg(short = 'h', long = "human")]
     human: bool,
 
     /// Print file type and permissions, e.g. [drwxr-xr-x]
@@ -123,6 +133,14 @@ struct Args {
     /// Color mode: always, auto (default), simple, never
     #[arg(long = "color", value_name = "WHEN", default_value = "auto")]
     color: ColorMode,
+
+    /// Show Nerd Font icons (default: on when TTY)
+    #[arg(long = "icons", overrides_with = "no_icons")]
+    icons: bool,
+
+    /// Disable Nerd Font icons
+    #[arg(long = "no-icons", overrides_with = "icons")]
+    no_icons: bool,
 
     // ── Output format ─────────────────────────────────────────────────────────
     #[clap(next_help_heading = "Output format")]
@@ -149,6 +167,10 @@ struct Args {
     /// Generate shell completions and print to stdout
     #[arg(long = "generate-completions", value_name = "SHELL", hide = true)]
     generate_completions: Option<Shell>,
+
+    /// Print help
+    #[arg(long, action = clap::ArgAction::Help)]
+    help: Option<bool>,
 }
 
 // ── Walk options ──────────────────────────────────────────────────────────────
@@ -175,9 +197,12 @@ pub struct WalkOpts {
     pub prune: bool,
     pub match_dirs: bool,
     pub ignore: Option<String>,
+    pub max_matches: Option<usize>,
     pub sort: SortBy,
     pub reverse: bool,
     pub color: ColorMode,
+    pub icons: bool,
+    pub ls_colors: Arc<LsColors>,
     pub root_dev: u64,
     pub output: OutputFmt,
 }
@@ -195,6 +220,19 @@ impl WalkOpts {
             else { OutputFmt::Tree };
 
         let root_dev = path.metadata().map(|m| m.dev()).unwrap_or(0);
+        let tty = io::stdout().is_terminal();
+        let color = match &args.color {
+            ColorMode::Auto => {
+                if !tty { ColorMode::Never }
+                else if args.permissions || args.date { ColorMode::Simple }
+                else { ColorMode::Always }
+            }
+            other => other.clone(),
+        };
+        // Icons: on by default when TTY and color is enabled; --icons forces on, --no-icons forces off
+        let icons = if args.no_icons { false }
+            else if args.icons { true }
+            else { tty && color != ColorMode::Never };
 
         WalkOpts {
             max_depth: args.level,
@@ -211,104 +249,139 @@ impl WalkOpts {
             prune: args.prune,
             match_dirs: args.pattern.as_deref().map_or(false, |p| p.ends_with('/')),
             ignore: args.ignore.clone(),
+            max_matches: args.max_matches,
             sort,
             reverse: args.reverse,
-            color: match &args.color {
-                ColorMode::Auto => {
-                    if !io::stdout().is_terminal() {
-                        ColorMode::Never
-                    } else if args.permissions || args.date {
-                        // busy output — file-type colors add noise
-                        ColorMode::Simple
-                    } else {
-                        ColorMode::Always
-                    }
-                }
-                other => other.clone(),
-            },
+            color,
+            icons,
+            ls_colors: Arc::new(LsColors::from_env()),
             root_dev,
             output,
         }
     }
 }
 
-// ── File type colors ──────────────────────────────────────────────────────────
+// ── LS_COLORS / EXA_COLORS parsing ───────────────────────────────────────────
 
-/// ANSI color code for a file based on type/extension.
-/// Directories handled separately; call this only for non-dirs.
-pub fn file_color(path: &Path) -> &'static str {
-    // Symlinks
-    if path.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
-        return "\x1b[36;1m";
-    }
-    // Executable bit
-    if path.metadata().map(|m| m.permissions().mode() & 0o111 != 0).unwrap_or(false) {
-        return "\x1b[32;1m";
-    }
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-    ext_ansi_color(&ext)
+/// Parsed representation of `LS_COLORS` / `EXA_COLORS`.
+/// Used to color files exactly as eza does.
+#[derive(Clone)]
+pub struct LsColors {
+    pub dir:        String,
+    pub link:       String,
+    pub exec:       String,
+    pub file:       String,
+    pub extensions: HashMap<String, String>,
 }
 
-pub fn ext_ansi_color(ext: &str) -> &'static str {
-    match ext {
-        "zip"|"tar"|"gz"|"bz2"|"xz"|"7z"|"rar"|"zst"|"lz4"|"cab"|"deb"|"rpm"|"apk"
-            => "\x1b[31;1m",
-        "png"|"jpg"|"jpeg"|"gif"|"bmp"|"svg"|"ico"|"webp"|"tiff"|"tif"|"psd"|"raw"|"heic"|"avif"
-            => "\x1b[35;1m",
-        "mp3"|"wav"|"flac"|"ogg"|"aac"|"m4a"|"opus"|"mid"|"midi"
-            => "\x1b[36m",
-        "mp4"|"mkv"|"avi"|"mov"|"webm"|"flv"|"wmv"|"m4v"
-            => "\x1b[96m",
-        "rs"|"c"|"cpp"|"cc"|"cxx"|"h"|"hpp"|"hxx"|"asm"|"s"
-            => "\x1b[33;1m",
-        "py"|"rb"|"lua"|"pl"|"php"|"r"|"jl"
-            => "\x1b[33m",
-        "js"|"ts"|"jsx"|"tsx"|"vue"|"svelte"|"html"|"htm"|"css"|"scss"|"sass"|"less"
-            => "\x1b[38;5;214m",
-        "java"|"kt"|"kts"|"scala"|"go"|"swift"|"cs"|"fs"|"clj"|"ex"|"exs"|"groovy"
-            => "\x1b[38;5;178m",
-        "sh"|"bash"|"zsh"|"fish"|"ps1"|"bat"|"cmd"
-            => "\x1b[32;1m",
-        "toml"|"yaml"|"yml"|"ini"|"conf"|"config"|"env"|"properties"|"cfg"|"editorconfig"
-            => "\x1b[38;5;244m",
-        "json"|"xml"|"csv"|"tsv"|"sql"|"proto"|"graphql"
-            => "\x1b[38;5;248m",
-        "md"|"rst"|"txt"|"org"|"adoc"|"man"
-            => "\x1b[37m",
-        "pdf"|"doc"|"docx"|"xls"|"xlsx"|"ppt"|"pptx"|"odt"|"ods"
-            => "\x1b[38;5;209m",
-        "ttf"|"otf"|"woff"|"woff2"
-            => "\x1b[38;5;141m",
-        "lock"|"sum"
-            => "\x1b[38;5;242m",
-        _ => "\x1b[0m",
+impl LsColors {
+    /// Parse from `EXA_COLORS` (preferred) or `LS_COLORS`.
+    /// Falls back to eza's built-in defaults when the env vars are absent.
+    pub fn from_env() -> Self {
+        let mut lsc = LsColors {
+            // eza defaults (bold blue dir, bold cyan link, bold green exec)
+            dir:        "34;1".to_string(),
+            link:       "36;1".to_string(),
+            exec:       "32;1".to_string(),
+            file:       String::new(),
+            extensions: HashMap::new(),
+        };
+        let raw = std::env::var("EXA_COLORS")
+            .or_else(|_| std::env::var("LS_COLORS"))
+            .unwrap_or_default();
+        for seg in raw.split(':') {
+            if let Some((k, v)) = seg.split_once('=') {
+                match k {
+                    "di" => lsc.dir  = v.to_string(),
+                    "ln" => lsc.link = v.to_string(),
+                    "ex" => lsc.exec = v.to_string(),
+                    "fi" => lsc.file = v.to_string(),
+                    k if k.starts_with("*.") => {
+                        lsc.extensions.insert(k[2..].to_lowercase(), v.to_string());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        lsc
+    }
+
+    fn ansi(code: &str) -> String {
+        if code.is_empty() { "\x1b[0m".to_string() }
+        else { format!("\x1b[{}m", code) }
+    }
+
+    pub fn dir_color(&self)  -> String { Self::ansi(&self.dir) }
+    pub fn link_color(&self) -> String { Self::ansi(&self.link) }
+
+    /// Color for a regular file (symlink/exec checked here to match eza priority).
+    pub fn file_color(&self, path: &Path, is_link: bool) -> String {
+        if is_link { return self.link_color(); }
+        if path.metadata().map(|m| m.permissions().mode() & 0o111 != 0).unwrap_or(false) {
+            return Self::ansi(&self.exec);
+        }
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        if !ext.is_empty() {
+            if let Some(c) = self.extensions.get(&ext) {
+                return Self::ansi(c);
+            }
+        }
+        Self::ansi(&self.file)
     }
 }
 
-/// Equivalent color for ratatui (by extension, no exec-bit check).
-/// Derives from ext_ansi_color so both stay in sync automatically.
+// ── Ratatui color helper (TUI only, kept for compatibility) ───────────────────
+
+/// Color for ratatui TUI (by extension only, no exec-bit check needed for display).
 pub fn ratatui_color_for_name(name: &str, is_dir: bool) -> ratatui::style::Color {
     use ratatui::style::Color;
     if is_dir { return Color::Blue; }
+    // Parse EXA_COLORS/LS_COLORS once for the TUI session
+    let lsc = LsColors::from_env();
     let ext = Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-    match ext_ansi_color(&ext) {
-        "\x1b[31;1m"      => Color::Red,
-        "\x1b[35;1m"      => Color::Magenta,
-        "\x1b[36m"        => Color::Cyan,
-        "\x1b[96m"        => Color::Cyan,
-        "\x1b[33;1m"      => Color::Yellow,
-        "\x1b[33m"        => Color::Yellow,
-        "\x1b[38;5;214m"  => Color::Yellow,
-        "\x1b[38;5;178m"  => Color::Yellow,
-        "\x1b[32;1m"      => Color::Green,
-        "\x1b[38;5;244m"  => Color::DarkGray,
-        "\x1b[38;5;248m"  => Color::DarkGray,
-        "\x1b[38;5;242m"  => Color::DarkGray,
-        "\x1b[37m"        => Color::White,
-        "\x1b[38;5;209m"  => Color::Rgb(255, 135, 95),
-        "\x1b[38;5;141m"  => Color::Rgb(175, 135, 255),
-        _                 => Color::Reset,
+    if ext.is_empty() { return Color::Reset; }
+    let code = lsc.extensions.get(&ext).map(|s| s.as_str()).unwrap_or("");
+    ansi_code_to_ratatui_color(code)
+}
+
+fn ansi_code_to_ratatui_color(code: &str) -> ratatui::style::Color {
+    use ratatui::style::Color;
+    // Parse the first recognizable color from the ANSI code string
+    let parts: Vec<&str> = code.split(';').collect();
+    let mut i = 0;
+    while i < parts.len() {
+        match parts[i] {
+            "38" if i + 1 < parts.len() => {
+                match parts[i + 1] {
+                    "5" if i + 2 < parts.len() => {
+                        // 256-color: map common ones to ratatui colors
+                        if let Ok(n) = parts[i + 2].parse::<u8>() {
+                            return Color::Indexed(n);
+                        }
+                    }
+                    "2" if i + 4 < parts.len() => {
+                        // RGB
+                        let r = parts[i+2].parse::<u8>().unwrap_or(0);
+                        let g = parts[i+3].parse::<u8>().unwrap_or(0);
+                        let b = parts[i+4].parse::<u8>().unwrap_or(0);
+                        return Color::Rgb(r, g, b);
+                    }
+                    _ => {}
+                }
+            }
+            "30" | "90" => return Color::DarkGray,
+            "31" | "91" => return Color::Red,
+            "32" | "92" => return Color::Green,
+            "33" | "93" => return Color::Yellow,
+            "34" | "94" => return Color::Blue,
+            "35" | "95" => return Color::Magenta,
+            "36" | "96" => return Color::Cyan,
+            "37" | "97" => return Color::White,
+            _ => {}
+        }
+        i += 1;
     }
+    Color::Reset
 }
 
 // ── Permissions ───────────────────────────────────────────────────────────────
@@ -440,11 +513,39 @@ fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     }
 }
 
+// ── Spinner (filtered mode) ───────────────────────────────────────────────────
+
+const SPINNER_FRAMES: &[char] = &['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
+
+thread_local! {
+    static SPINNER_STOP:   RefCell<Option<Arc<AtomicBool>>>      = RefCell::new(None);
+    static SPINNER_HANDLE: RefCell<Option<thread::JoinHandle<()>>> = RefCell::new(None);
+}
+
+/// Stop the spinner and wait for it to clear its line before any output is printed.
+/// Safe to call multiple times — subsequent calls are no-ops.
+fn stop_spinner() {
+    let stop   = SPINNER_STOP.with(|s| s.borrow_mut().take());
+    let handle = SPINNER_HANDLE.with(|h| h.borrow_mut().take());
+    if let Some(s) = stop  { s.store(true, Ordering::Relaxed); }
+    if let Some(h) = handle { let _ = h.join(); }
+}
+
 // ── read_children ─────────────────────────────────────────────────────────────
 
 pub fn read_children(path: &Path, opts: &WalkOpts) -> Vec<PathBuf> {
     let mut entries: Vec<PathBuf> = match std::fs::read_dir(path) {
-        Ok(rd) => rd.filter_map(|e| e.ok()).map(|e| e.path())
+        Ok(rd) => rd.filter_map(|e| e.ok())
+            .filter(|e| {
+                // Fast early skip of plain files using DirEntry::file_type()
+                // (avoids an extra stat() — uses d_type from readdir on most filesystems).
+                // When match_dirs or dirs_only, plain files can never contribute to output.
+                if opts.match_dirs || opts.dirs_only {
+                    if e.file_type().map_or(false, |t| t.is_file()) { return false; }
+                }
+                true
+            })
+            .map(|e| e.path())
             .filter(|p| {
                 // hidden files
                 opts.all || !p.file_name()
@@ -468,29 +569,32 @@ pub fn read_children(path: &Path, opts: &WalkOpts) -> Vec<PathBuf> {
     };
 
     match opts.sort {
-        SortBy::Name => entries.sort_by(|a, b| {
-            let ad = is_dir_entry(a, opts.follow_links);
-            let bd = is_dir_entry(b, opts.follow_links);
-            match (ad, bd) {
-                (true, false) => std::cmp::Ordering::Less,
-                (false, true) => std::cmp::Ordering::Greater,
-                _ => a.file_name().and_then(|n| n.to_str()).unwrap_or("")
-                      .to_lowercase()
-                      .cmp(&b.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase()),
-            }
+        // sort_by_cached_key calls the key fn exactly once per element (O(n) stats)
+        // instead of once per comparison (O(n log n) stats).
+        SortBy::Name => entries.sort_by_cached_key(|p| {
+            let is_dir = is_dir_entry(p, opts.follow_links);
+            (std::cmp::Reverse(is_dir),
+             p.file_name().and_then(|n| n.to_str()).map(|s| s.to_lowercase()).unwrap_or_default())
         }),
-        SortBy::Version => entries.sort_by(|a, b| {
-            let ad = is_dir_entry(a, opts.follow_links);
-            let bd = is_dir_entry(b, opts.follow_links);
-            match (ad, bd) {
-                (true, false) => std::cmp::Ordering::Less,
-                (false, true) => std::cmp::Ordering::Greater,
-                _ => natural_cmp(
-                    a.file_name().and_then(|n| n.to_str()).unwrap_or(""),
-                    b.file_name().and_then(|n| n.to_str()).unwrap_or(""),
-                ),
-            }
-        }),
+        SortBy::Version => {
+            // natural_cmp can't be expressed as a key, so we sort indices with a precomputed
+            // is_dir cache (parallel) to avoid O(n log n) stats.
+            let is_dir_cache: Vec<bool> = entries.par_iter()
+                .map(|p| is_dir_entry(p, opts.follow_links))
+                .collect();
+            let mut idx: Vec<usize> = (0..entries.len()).collect();
+            idx.sort_by(|&a, &b| {
+                match (is_dir_cache[a], is_dir_cache[b]) {
+                    (true, false) => std::cmp::Ordering::Less,
+                    (false, true) => std::cmp::Ordering::Greater,
+                    _ => natural_cmp(
+                        entries[a].file_name().and_then(|n| n.to_str()).unwrap_or(""),
+                        entries[b].file_name().and_then(|n| n.to_str()).unwrap_or(""),
+                    ),
+                }
+            });
+            entries = idx.into_iter().map(|i| entries[i].clone()).collect();
+        },
         SortBy::ModTime => entries.sort_by(|a, b| {
             let ta = a.metadata().and_then(|m| m.modified()).unwrap_or(UNIX_EPOCH);
             let tb = b.metadata().and_then(|m| m.modified()).unwrap_or(UNIX_EPOCH);
@@ -518,6 +622,14 @@ fn format_line(path: &Path, prefix: &str, size: Option<u64>, opts: &WalkOpts) ->
         path.to_string_lossy().to_string()
     } else {
         node_name(path)
+    };
+
+    // Icon (Nerd Font)
+    let icon_char = if opts.icons {
+        let ext = path.extension().and_then(|e| e.to_str()).map(|s| s.to_lowercase());
+        Some(icons::icon_for_file(&display_name, is_dir, ext.as_deref()))
+    } else {
+        None
     };
 
     // Permissions prefix
@@ -548,13 +660,17 @@ fn format_line(path: &Path, prefix: &str, size: Option<u64>, opts: &WalkOpts) ->
     };
 
     if opts.color == ColorMode::Never {
-        return format!("{}{}{}{}{}{}", prefix, perms_str, date_str, display_name, link_str, size_str);
+        let icon_part = icon_char.map(|c| format!("{} ", c)).unwrap_or_default();
+        return format!("{}{}{}{}{}{}{}", prefix, perms_str, date_str, icon_part, display_name, link_str, size_str);
     }
 
-    let name_color = if is_dir { "\x1b[34;1m" }
-        else if is_link { "\x1b[36;1m" }
-        else if opts.color != ColorMode::Always { "\x1b[0m" }
-        else { file_color(path) };
+    let name_color = if is_dir {
+        opts.ls_colors.dir_color()
+    } else if opts.color != ColorMode::Always {
+        "\x1b[0m".to_string()
+    } else {
+        opts.ls_colors.file_color(path, is_link)
+    };
 
     let reset = "\x1b[0m";
     let dim   = "\x1b[90m";
@@ -569,6 +685,9 @@ fn format_line(path: &Path, prefix: &str, size: Option<u64>, opts: &WalkOpts) ->
     if !date_str.is_empty() {
         out.push_str(&format!("{dim}{date_str}{reset}"));
     }
+    if let Some(ic) = icon_char {
+        out.push_str(&format!("{name_color}{ic} {reset}"));
+    }
     out.push_str(&format!("{name_color}{display_name}{reset}"));
     if is_link {
         let target = link_str.trim_start_matches(" -> ");
@@ -579,6 +698,23 @@ fn format_line(path: &Path, prefix: &str, size: Option<u64>, opts: &WalkOpts) ->
     }
 
     out
+}
+
+// ── Recursive dir size (used when dirs_only hides files from traversal) ───────
+
+fn dir_size(path: &Path, follow: bool) -> u64 {
+    let mut total = 0u64;
+    if let Ok(rd) = std::fs::read_dir(path) {
+        for entry in rd.filter_map(|e| e.ok()) {
+            let p = entry.path();
+            if is_dir_entry(&p, follow) {
+                total += dir_size(&p, follow);
+            } else {
+                total += p.metadata().map(|m| m.len()).unwrap_or(0);
+            }
+        }
+    }
+    total
 }
 
 // ── Cursor rewrite for dir sizes ──────────────────────────────────────────────
@@ -622,11 +758,19 @@ fn stream_node(
         return (sz, 1);
     }
 
-    println!("{}", format_line(path, &conn, None, opts));
+    // When dirs_only is active, files are never traversed so we can't accumulate
+    // their sizes bottom-up. Pre-compute the full recursive size upfront instead.
+    let precomputed_sz = if opts.size && opts.dirs_only {
+        Some(dir_size(path, opts.follow_links))
+    } else {
+        None
+    };
+
+    println!("{}", format_line(path, &conn, precomputed_sz, opts));
     counters.dirs += 1;
 
     if !opts.max_depth.map_or(true, |m| depth < m) {
-        return (0, 1);
+        return (precomputed_sz.unwrap_or(0), 1);
     }
 
     let children = read_children(path, opts);
@@ -640,11 +784,14 @@ fn stream_node(
         child_lines += lines;
     }
 
-    if opts.size && tty {
-        fix_line_above(child_lines, &format_line(path, &conn, Some(total_sz), opts));
+    if opts.size && tty && !opts.dirs_only {
+        let th = crossterm::terminal::size().map(|(_, r)| r as usize).unwrap_or(0);
+        if child_lines < th {
+            fix_line_above(child_lines, &format_line(path, &conn, Some(total_sz), opts));
+        }
     }
 
-    (total_sz, 1 + child_lines)
+    (precomputed_sz.unwrap_or(total_sz), 1 + child_lines)
 }
 
 // ── Streaming DFS — with filter / prune ──────────────────────────────────────
@@ -654,13 +801,34 @@ fn stream_node(
 //
 // Returns (produced, size, lines_printed_by_this_call).
 
+/// Returns true if this path or any descendant will produce a line in filtered output.
+/// Used to pre-filter children so `is_last` connectors are assigned correctly.
+fn will_produce_output(
+    path: &Path, pattern: &Regex, all_files: bool, force_show: bool,
+    opts: &WalkOpts, depth: usize,
+) -> bool {
+    let name = node_name(path);
+    let is_dir = is_dir_entry(path, opts.follow_links);
+    let name_matches = (!opts.match_dirs || is_dir) && pattern.is_match(&name);
+    if force_show || name_matches { return true; }
+    if !is_dir { return all_files; }
+    if !opts.max_depth.map_or(true, |m| depth < m) { return false; }
+    read_children(path, opts).into_par_iter()
+        .any(|child| will_produce_output(&child, pattern, all_files, false, opts, depth + 1))
+}
+
 fn stream_filtered(
     path: &Path, pattern: &Regex, all_files_visible: bool,
     opts: &WalkOpts,
     prefix: &str, is_last: bool, depth: usize,
     force_show: bool,
-    counters: &mut Counters, pending: &mut Vec<String>, tty: bool,
+    counters: &mut Counters, matched: &mut usize, pending: &mut Vec<String>, tty: bool,
 ) -> (bool, u64, usize) {
+    // Stop as soon as the match limit is reached
+    if opts.max_matches.map_or(false, |m| *matched >= m) {
+        return (false, 0, 0);
+    }
+
     let name = node_name(path);
     let is_dir = is_dir_entry(path, opts.follow_links);
     let name_matches = (!opts.match_dirs || is_dir) && pattern.is_match(&name);
@@ -675,9 +843,11 @@ fn stream_filtered(
         if !file_visible { return (false, 0, 0); }
         let sz = path.metadata().map(|m| m.len()).unwrap_or(0);
         let mut flushed = 0usize;
+        stop_spinner();
         for line in pending.drain(..) { println!("{}", line); flushed += 1; }
         println!("{}", format_line(path, &conn, opts.size.then_some(sz), opts));
         counters.files += 1;
+        if name_matches { *matched += 1; }
         return (true, sz, flushed + 1);
     }
 
@@ -686,20 +856,34 @@ fn stream_filtered(
 
     if show && !opts.prune {
         let mut flushed = 0usize;
+        stop_spinner();
         for line in pending.drain(..) { println!("{}", line); flushed += 1; }
-        println!("{}", format_line(path, &conn, None, opts));
+
+        // dirs_only hides files from traversal so sizes can't be accumulated bottom-up
+        let precomputed_sz = if opts.size && opts.dirs_only {
+            Some(dir_size(path, opts.follow_links))
+        } else {
+            None
+        };
+        println!("{}", format_line(path, &conn, precomputed_sz, opts));
         counters.dirs += 1;
+        if name_matches { *matched += 1; }
 
         let mut total_sz = 0u64;
         let mut child_lines = 0usize;
         if can_descend {
             let children = read_children(path, opts);
-            let n = children.len();
 
             if opts.match_dirs && name_matches {
-                // This dir matched — show its immediate children only, don't recurse
-                for (i, child) in children.iter().enumerate() {
-                    let child_conn = connector(&indent, i == n - 1, depth + 1);
+                // This dir matched — show its immediate children (including files).
+                // read_children skips plain files when match_dirs=true, so re-read
+                // with match_dirs=false to get the full directory listing.
+                let mut full_opts = opts.clone();
+                full_opts.match_dirs = false;
+                let full_children = read_children(path, &full_opts);
+                let nf = full_children.len();
+                for (i, child) in full_children.iter().enumerate() {
+                    let child_conn = connector(&indent, i == nf - 1, depth + 1);
                     let sz = child.metadata().map(|m| m.len()).unwrap_or(0);
                     println!("{}", format_line(&child, &child_conn, opts.size.then_some(sz), opts));
                     if !is_dir_entry(&child, opts.follow_links) { counters.files += 1; }
@@ -708,24 +892,32 @@ fn stream_filtered(
                     total_sz += sz;
                 }
             } else {
-                // Normal: recurse, passing force_show down for ancestors of a match
+                // Pre-filter children to only those that will produce output so that
+                // is_last connectors (└── vs ├──) are based on the visible set.
                 let subtree_force = force_show || name_matches;
+                let visible: Vec<PathBuf> = children.into_par_iter()
+                    .filter(|c| will_produce_output(c, pattern, all_files_visible, subtree_force, opts, depth + 1))
+                    .collect();
+                let m = visible.len();
                 let mut inner: Vec<String> = Vec::new();
-                for (i, child) in children.iter().enumerate() {
+                for (i, child) in visible.iter().enumerate() {
                     let (_, sz, lines) = stream_filtered(
                         child, pattern, all_files_visible, opts,
-                        &indent, i == n - 1, depth + 1, subtree_force,
-                        counters, &mut inner, tty,
+                        &indent, i == m - 1, depth + 1, subtree_force,
+                        counters, matched, &mut inner, tty,
                     );
                     total_sz += sz;
                     child_lines += lines;
                 }
             }
         }
-        if opts.size && tty {
-            fix_line_above(child_lines, &format_line(path, &conn, Some(total_sz), opts));
+        if opts.size && tty && !opts.dirs_only {
+            let th = crossterm::terminal::size().map(|(_, r)| r as usize).unwrap_or(0);
+            if child_lines < th {
+                fix_line_above(child_lines, &format_line(path, &conn, Some(total_sz), opts));
+            }
         }
-        return (true, total_sz, flushed + 1 + child_lines);
+        return (true, precomputed_sz.unwrap_or(total_sz), flushed + 1 + child_lines);
     }
 
     // Dir is pending (prune mode or name doesn't match)
@@ -738,12 +930,16 @@ fn stream_filtered(
 
     if can_descend {
         let children = read_children(path, opts);
-        let n = children.len();
-        for (i, child) in children.iter().enumerate() {
+        // Pre-filter for correct is_last connectors
+        let visible: Vec<PathBuf> = children.into_par_iter()
+            .filter(|c| will_produce_output(c, pattern, all_files_visible, false, opts, depth + 1))
+            .collect();
+        let m = visible.len();
+        for (i, child) in visible.iter().enumerate() {
             let (prod, sz, lines) = stream_filtered(
                 child, pattern, all_files_visible, opts,
-                &indent, i == n - 1, depth + 1, false,
-                counters, pending, tty,
+                &indent, i == m - 1, depth + 1, false,
+                counters, matched, pending, tty,
             );
             if prod { produced = true; total_sz += sz; child_lines += lines; }
         }
@@ -753,6 +949,7 @@ fn stream_filtered(
         pending.truncate(saved_len);
     } else {
         counters.dirs += 1;
+        if name_matches { *matched += 1; }
     }
     (produced, total_sz, child_lines)
 }
@@ -769,7 +966,6 @@ fn print_plain(root: &Path, opts: &WalkOpts, pattern: Option<&str>) {
 
     let can_descend = opts.max_depth.map_or(true, |m| 0 < m);
     let mut total_sz = 0u64;
-    let mut child_lines = 0usize;
 
     if can_descend {
         let children = read_children(root, opts);
@@ -777,6 +973,27 @@ fn print_plain(root: &Path, opts: &WalkOpts, pattern: Option<&str>) {
         let use_filter = pattern.is_some() || opts.prune;
 
         if use_filter {
+            // Start a spinner on stderr so the user knows we're scanning.
+            // It is stopped (and its line cleared) before the first output line is printed.
+            if tty {
+                let stop = Arc::new(AtomicBool::new(false));
+                let stop2 = Arc::clone(&stop);
+                let handle = thread::spawn(move || {
+                    let mut i = 0usize;
+                    while !stop2.load(Ordering::Relaxed) {
+                        eprint!("\r\x1b[90m{} Scanning…\x1b[0m",
+                            SPINNER_FRAMES[i % SPINNER_FRAMES.len()]);
+                        let _ = io::stderr().flush();
+                        i += 1;
+                        thread::sleep(Duration::from_millis(80));
+                    }
+                    eprint!("\r\x1b[K");
+                    let _ = io::stderr().flush();
+                });
+                SPINNER_STOP.with(|s| *s.borrow_mut() = Some(stop));
+                SPINNER_HANDLE.with(|h| *h.borrow_mut() = Some(handle));
+            }
+
             let pat_str = pattern.unwrap_or("");
             let pat = match Regex::new(pat_str) {
                 Ok(r) => r,
@@ -787,33 +1004,50 @@ fn print_plain(root: &Path, opts: &WalkOpts, pattern: Option<&str>) {
             };
             let all_files = opts.prune && pattern.is_none();
             let mut pending: Vec<String> = Vec::new();
-            for (i, child) in children.iter().enumerate() {
-                let (_, sz, lines) = stream_filtered(
+            let mut matched = 0usize;
+            // Pre-filter root children for correct is_last connectors
+            let visible: Vec<PathBuf> = children.into_par_iter()
+                .filter(|c| will_produce_output(c, &pat, all_files, false, opts, 1))
+                .collect();
+            let m = visible.len();
+            for (i, child) in visible.iter().enumerate() {
+                let (_, sz, _) = stream_filtered(
                     child, &pat, all_files, opts,
-                    "", i == n - 1, 1, false,
-                    &mut counters, &mut pending, tty,
+                    "", i == m - 1, 1, false,
+                    &mut counters, &mut matched, &mut pending, tty,
                 );
                 total_sz += sz;
-                child_lines += lines;
+            }
+            // Ensure spinner is stopped (either it was cleared on first output,
+            // or there were no matches and it's still running)
+            stop_spinner();
+
+            if pattern.is_some() && matched == 0 {
+                let c = if opts.color != ColorMode::Never { "\x1b[33m" } else { "" };
+                let r = if opts.color != ColorMode::Never { "\x1b[0m" } else { "" };
+                eprintln!("{}No matches for '{}'{}", c, pat_str, r);
             }
         } else {
             for (i, child) in children.iter().enumerate() {
-                let (sz, lines) = stream_node(child, opts, "", i == n - 1, 1, &mut counters, tty);
+                let (sz, _) = stream_node(child, opts, "", i == n - 1, 1, &mut counters, tty);
                 total_sz += sz;
-                child_lines += lines;
             }
         }
     }
 
-    if opts.size && tty {
-        fix_line_above(child_lines, &format_line(root, "", Some(total_sz), opts));
-    }
-
+    // Root size: cursor-rewriting back to the first line is unreliable when output
+    // exceeds terminal height (ANSI cursor-up is bounded by the visible window).
+    // Instead, append the total to the summary line which is always visible.
     let c = if opts.color != ColorMode::Never { "\x1b[90m" } else { "" };
     let r = if opts.color != ColorMode::Never { "\x1b[0m" } else { "" };
-    eprintln!("\n{}{} director{}, {} file{}{}", c,
+    let size_part = if opts.size {
+        let s = if opts.human { human_size(total_sz) } else { format!("{}B", total_sz) };
+        format!(", {}{}{}", c, s, r)
+    } else { String::new() };
+    eprintln!("\n{}{} director{}, {} file{}{}{}", c,
         counters.dirs, if counters.dirs == 1 { "y" } else { "ies" },
-        counters.files, if counters.files == 1 { "" } else { "s" }, r);
+        counters.files, if counters.files == 1 { "" } else { "s" },
+        r, size_part);
 }
 
 // ── JSON output ───────────────────────────────────────────────────────────────
@@ -949,13 +1183,12 @@ fn load_tree_with_spinner(path: &Path, opts: WalkOpts) -> TreeNode {
     let p2 = path.to_path_buf();
     let o2 = opts.clone();
     thread::spawn(move || { let _ = tx.send(build_tree(&p2, &o2, 0)); });
-    let frames = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
     let mut i = 0usize;
     loop {
         match rx.try_recv() {
             Ok(tree) => { print!("\r\x1b[K"); let _ = io::stdout().flush(); return tree; }
             Err(mpsc::TryRecvError::Empty) => {
-                print!("\r\x1b[90m{} Scanning…\x1b[0m", frames[i % frames.len()]);
+                print!("\r\x1b[90m{} Scanning…\x1b[0m", SPINNER_FRAMES[i % SPINNER_FRAMES.len()]);
                 let _ = io::stdout().flush();
                 i += 1;
                 thread::sleep(Duration::from_millis(80));

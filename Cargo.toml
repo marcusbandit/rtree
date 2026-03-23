@@ -12,6 +12,8 @@ clap_complete = "4"
 regex = "1"
 ratatui = "0.29"
 crossterm = "0.28"
+rayon = "1"
+phf = { version = "0.11", features = ["macros"] }
 
 [package.metadata.deb]
 maintainer = "Marcus Bandit <marcusbanditten@gmail.com>"
