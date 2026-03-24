@@ -1,0 +1,48 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+Architectures: amd64
+Codename: stable
+Components: main
+Date: Tue, 24 Mar 2026 01:00:54 +0000
+Description: newtree apt repository
+Label: newtree
+Origin: newtree
+Suite: stable
+MD5Sum:
+ c3f63bd204753ae5a1cf4f48fa593ac9              174 Release
+ 19c1bd672b38eda605b099c0ded7d4c3              646 main/binary-amd64/Packages
+ 63cb67dfe263d28eff2dee308a6de6f6              527 main/binary-amd64/Packages.bz2
+ 6645c41ebac2f53399133a086cbf3eb6              486 main/binary-amd64/Packages.gz
+SHA1:
+ 9312ac36cd147f83c52b43b7219d2b23d23ebdd7              174 Release
+ 7af78281c2d112253045e95ccffbe14331b51132              646 main/binary-amd64/Packages
+ c00b0f08d3dc8838c99cef86fd543efca6ec15ff              527 main/binary-amd64/Packages.bz2
+ 56aba531dc75c04f1ae5db508ab3d591c2b1e36c              486 main/binary-amd64/Packages.gz
+SHA256:
+ 00973b181c3b50b2a796d65c58f34c948dfc7ebf4c91b857a2cd990b8aef44e2              174 Release
+ 44984edcaf4ce71ee5e12eefada3c2a17236b224b294403a4c52145fb8072e20              646 main/binary-amd64/Packages
+ b9bf4be7ed59f4848a633b4bd557c293bf6a252e763e388c3fe97113ec49efa5              527 main/binary-amd64/Packages.bz2
+ 80b30b4887fccbcb9abb847b1a27028ab5e37e882f0d71fa73d7b3e497577f45              486 main/binary-amd64/Packages.gz
+SHA512:
+ f5d6ba7f11a3469666ed24d905d5e17d4cd31a721dccc4b71994247eadbfea15e346a71385bca3773d9c4e7d27964779284e0cb05387a20a5f73334b5532d234              174 Release
+ 9d105061bfdd376cb88141ce405714fbedffc8588b85d8951eaeca65bc53f8aef49fb1e1077a8d38101170a32cb3efcd99acff50ddade595b8f7e6e3972a1160              646 main/binary-amd64/Packages
+ 6c876f0f9216e28b700b2cbc79ce5865020990689c9a9d8c1868eaded2d4a450a24efd1b9bf97b31c4ca41d6f7b96f9056f0fce5f8302ff4f6e5339f2c4a114f              527 main/binary-amd64/Packages.bz2
+ 79b458b240b273e668a9a9e0e2b36368395fde0dba721f5623751576ab4eae455dea7c50478cdb6a13bc9230007d233dd1de8d931420934b35a282b072c3f063              486 main/binary-amd64/Packages.gz
+-----BEGIN PGP SIGNATURE-----
+
+iQJOBAEBCgA4FiEE0e6frtrEn+71GPeBjUIpiWs/B2cFAmnB4kcaHG1hcmN1c2Jh
+bmRpdHRlbkBnbWFpbC5jb20ACgkQjUIpiWs/B2cQIBAAkovsw3SYMUSIw84sn8a2
+HLCZ/ra3zr+NdJsmSSjPYNEXOVBKTAuL51OdbCNqQx+qe/3WHZS4yxJhZVhjd38M
+Z+zlP/FUFK90eAbbVcd4tAjlap1k2J+FXY9SIiCAdgU24yLZG2+ZO0iUh1TYcSjp
+2Ow8uV5Q45LnrqaUVNHG4CN+pG06VNNWsO2JF3Y5Ac9hnVktl+sbd8R6W/iGC3p2
+dTDOwTaGeXPfXcKMjHEqiAvibbbmR1GI6IMT1GymXNRFXU38HRjx7tARTHrzOkbM
+6dZay74d7nGgurB29TKs9HAZ39ySOGnpapWdxf95J8/dS5vZZUq9bOie0+AUVyzq
+uHJa0eLesuMkinYc7nSApZY3529t9wnd64wwnDFvkTJhhZ4OcVMgTZBGHh0gndqL
+Y859XszD7EkZAeuDEQOwChBMciN2/RjuFXHIeeA7rr+mKGw1xoP7LhImN8yqerak
+n8bc9UDFtduyy2i1Iy6Zz8G2jGqsKfqL39B+Jy8U71Yktp9MKIQDdtGcQsYRn+Kw
+5FUsVRDE0W9qhfk1GpaMUcteAx1mo2rK7jIk5c2M1tR/ExMczNRZeR/uxYv7dEl2
+1uoQB2V8Vjbs4BtP+gIk4JVd8In+thvElrUmFXgwi2dfsvBKRWw3GRJiy1H3UT88
+tBIGs5mVHfSyO4V+YnB2QXI=
+=M/c5
+-----END PGP SIGNATURE-----

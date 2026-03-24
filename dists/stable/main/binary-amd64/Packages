@@ -1,0 +1,18 @@
+Package: newtree
+Version: 0.2.0-1
+Architecture: amd64
+Maintainer: Marcus Bandit <marcusbanditten@gmail.com>
+Installed-Size: 3529
+Depends: libc6 (>= 2.39)
+Filename: pool/main/newtree_0.2.0-1_amd64.deb
+Size: 992916
+MD5sum: d7e01397d0901cf26fcdb9cb63b7ef66
+SHA1: 7a7a6a4721a7901f3397c81e049795f7ca59f5eb
+SHA256: 64c34ee153cbaf65145fc0ae761c04bfece151e61402886c48ea96fec4181728
+Section: utils
+Priority: optional
+Description: [generated from Rust crate newtree]
+ A modern reimagining of the classic tree command. Keeps the familiar interface
+ but fixes pattern filtering to actually prune output, adds Nerd Font icons,
+ color, and a live-search TUI.
+
