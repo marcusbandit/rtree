@@ -35,7 +35,7 @@ pub enum ColorMode {
 
 #[derive(Parser, Clone)]
 #[command(
-    name = "rtree",
+    name = "nt",
     about = "A fast, colorful tree with live-search TUI.\n\n\
              Default: streams DFS output to stdout.\n\
              Use --tui for the interactive search interface.",
@@ -998,7 +998,7 @@ fn print_plain(root: &Path, opts: &WalkOpts, pattern: Option<&str>) {
             let pat = match Regex::new(pat_str) {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("rtree: invalid regex '{}': {}", pat_str, e);
+                    eprintln!("nt: invalid regex '{}': {}", pat_str, e);
                     std::process::exit(1);
                 }
             };
@@ -1201,21 +1201,31 @@ fn load_tree_with_spinner(path: &Path, opts: WalkOpts) -> TreeNode {
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 fn main() {
+    // When invoked as `newtree`, show help and hint to use `nt`
+    let binary_name = std::env::args().next()
+        .and_then(|s| std::path::Path::new(&s).file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_default();
+    if binary_name == "newtree" {
+        Args::command().print_help().unwrap();
+        eprintln!("\n\nTip: use `nt` for short!");
+        return;
+    }
+
     let args = Args::parse();
 
     if let Some(shell) = args.generate_completions {
-        generate(shell, &mut Args::command(), "rtree", &mut io::stdout());
+        generate(shell, &mut Args::command(), "nt", &mut io::stdout());
         return;
     }
 
     if args.json && args.xml {
-        eprintln!("rtree: -J and -X are mutually exclusive");
+        eprintln!("nt: -J and -X are mutually exclusive");
         std::process::exit(1);
     }
 
     let path = args.path.clone().unwrap_or_else(|| PathBuf::from("."));
     if !path.exists() {
-        eprintln!("rtree: '{}': no such file or directory", path.display());
+        eprintln!("nt: '{}': no such file or directory", path.display());
         std::process::exit(1);
     }
 

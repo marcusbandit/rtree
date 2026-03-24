@@ -71,13 +71,13 @@ jobs:
 
           # Build Release file
           apt-ftparchive \
-            -o APT::FTPArchive::Release::Origin="rtree" \
-            -o APT::FTPArchive::Release::Label="rtree" \
+            -o APT::FTPArchive::Release::Origin="newtree" \
+            -o APT::FTPArchive::Release::Label="newtree" \
             -o APT::FTPArchive::Release::Suite="stable" \
             -o APT::FTPArchive::Release::Codename="stable" \
             -o APT::FTPArchive::Release::Architectures="amd64" \
             -o APT::FTPArchive::Release::Components="main" \
-            -o APT::FTPArchive::Release::Description="rtree apt repository" \
+            -o APT::FTPArchive::Release::Description="newtree apt repository" \
             release dists/stable/ > dists/stable/Release
 
           # Sign Release
@@ -95,5 +95,5 @@ jobs:
           git config user.email "marcusbanditten@gmail.com"
           git add -A
           VERSION=$(echo "${{ github.ref_name }}" | sed 's/^v//')
-          git commit -m "apt: publish rtree ${VERSION:-$(date +%Y%m%d)}" || echo "Nothing to commit"
+          git commit -m "apt: publish newtree ${VERSION:-$(date +%Y%m%d)}" || echo "Nothing to commit"
           git push origin gh-pages

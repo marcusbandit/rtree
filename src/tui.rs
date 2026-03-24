@@ -120,7 +120,7 @@ fn render(f: &mut Frame, app: &App) {
 
     let title = Line::from(vec![
         Span::styled(
-            " rtree ",
+            " newtree",
             Style::default()
                 .bg(Color::Blue)
                 .fg(Color::White)

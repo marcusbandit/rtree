@@ -55,9 +55,9 @@ jobs:
           # Build for the host so we can actually run the binary (cross-compiled
           # binaries can't execute on the runner). Completions are arch-independent.
           cargo build --release --quiet
-          ./target/release/rtree --generate-completions bash > completions/rtree.bash
-          ./target/release/rtree --generate-completions zsh  > completions/_rtree
-          ./target/release/rtree --generate-completions fish > completions/rtree.fish
+          ./target/release/nt --generate-completions bash > completions/nt.bash
+          ./target/release/nt --generate-completions zsh  > completions/_nt
+          ./target/release/nt --generate-completions fish > completions/nt.fish
 
       - name: Build .deb
         if: matrix.deb
@@ -69,8 +69,8 @@ jobs:
         shell: bash
         run: |
           version="${GITHUB_REF_NAME#v}"
-          src="target/${{ matrix.target }}/release/rtree"
-          dst="rtree-${version}-${{ matrix.target }}"
+          src="target/${{ matrix.target }}/release/nt"
+          dst="nt-${version}-${{ matrix.target }}"
           cp "$src" "$dst"
           echo "ASSET=$dst" >> $GITHUB_ENV
 

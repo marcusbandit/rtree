@@ -1,10 +1,11 @@
 [package]
-name = "rtree"
+name = "newtree"
 version = "0.1.2"
 edition = "2021"
 
 [[bin]]
-name = "rtree"
+name = "nt"
+path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
@@ -19,16 +20,16 @@ phf = { version = "0.11", features = ["macros"] }
 maintainer = "Marcus Bandit <marcusbanditten@gmail.com>"
 copyright = "2026 marcusbandit"
 license-file = ["LICENSE", "0"]
-extended-description = "A fast tree command with smart pattern filtering and a live-search TUI. Unlike tree's -P flag, rtree prunes the output to only show paths that lead to a match."
+extended-description = "A fast tree command with smart pattern filtering and a live-search TUI. Unlike tree's -P flag, newtree prunes the output to only show paths that lead to a match."
 depends = "$auto"
 section = "utils"
 priority = "optional"
 assets = [
-  ["target/release/rtree", "usr/bin/", "755"],
-  ["completions/rtree.bash", "usr/share/bash-completion/completions/rtree", "644"],
-  ["completions/_rtree", "usr/share/zsh/site-functions/_rtree", "644"],
-  ["completions/rtree.fish", "usr/share/fish/vendor_completions.d/rtree.fish", "644"],
-  ["README.md", "usr/share/doc/rtree/README.md", "644"],
+  ["target/release/nt", "usr/bin/", "755"],
+  ["completions/nt.bash", "usr/share/bash-completion/completions/nt", "644"],
+  ["completions/_nt", "usr/share/zsh/site-functions/_nt", "644"],
+  ["completions/nt.fish", "usr/share/fish/vendor_completions.d/nt.fish", "644"],
+  ["README.md", "usr/share/doc/newtree/README.md", "644"],
 ]
 
 [profile.release]

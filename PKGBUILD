@@ -1,10 +1,10 @@
 # Maintainer: Marcus Bandit <marcusbanditten@gmail.com>
-pkgname=rtree
+pkgname=newtree
 pkgver=0.1.1
 pkgrel=1
 pkgdesc="A fast tree command with smart pattern filtering and live-search TUI"
 arch=('x86_64')
-url="https://github.com/marcusbandit/rtree"
+url="https://github.com/marcusbandit/newtree"
 license=('MIT')
 makedepends=('cargo')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/marcusbandit/$pkgname/archive/refs/tags/v$pkgver.tar.gz")
@@ -23,9 +23,9 @@ build() {
   cargo build --frozen --release --all-features
 
   mkdir -p completions
-  ./target/release/rtree --generate-completions bash > completions/rtree.bash
-  ./target/release/rtree --generate-completions zsh  > completions/_rtree
-  ./target/release/rtree --generate-completions fish > completions/rtree.fish
+  ./target/release/nt --generate-completions bash > completions/nt.bash
+  ./target/release/nt --generate-completions zsh  > completions/_nt
+  ./target/release/nt --generate-completions fish > completions/nt.fish
 }
 
 check() {
@@ -36,9 +36,10 @@ check() {
 
 package() {
   cd "$pkgname-$pkgver"
-  install -Dm755 "target/release/$pkgname"        "$pkgdir/usr/bin/$pkgname"
-  install -Dm644 LICENSE                           "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
-  install -Dm644 completions/rtree.bash            "$pkgdir/usr/share/bash-completion/completions/rtree"
-  install -Dm644 completions/_rtree                "$pkgdir/usr/share/zsh/site-functions/_rtree"
-  install -Dm644 completions/rtree.fish            "$pkgdir/usr/share/fish/vendor_completions.d/rtree.fish"
+  install -Dm755 "target/release/nt"               "$pkgdir/usr/bin/nt"
+  install -Dm755 "target/release/nt"               "$pkgdir/usr/bin/newtree"
+  install -Dm644 LICENSE                            "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 completions/nt.bash                "$pkgdir/usr/share/bash-completion/completions/nt"
+  install -Dm644 completions/_nt                    "$pkgdir/usr/share/zsh/site-functions/_nt"
+  install -Dm644 completions/nt.fish                "$pkgdir/usr/share/fish/vendor_completions.d/nt.fish"
 }

@@ -396,6 +396,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "newtree"
+version = "0.1.2"
+dependencies = [
+ "clap",
+ "clap_complete",
+ "crossterm",
+ "phf",
+ "ratatui",
+ "rayon",
+ "regex",
+]
+
+[[package]]
 name = "once_cell_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -583,19 +596,6 @@ name = "regex-syntax"
 version = "0.8.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
-
-[[package]]
-name = "rtree"
-version = "0.1.2"
-dependencies = [
- "clap",
- "clap_complete",
- "crossterm",
- "phf",
- "ratatui",
- "rayon",
- "regex",
-]
 
 [[package]]
 name = "rustix"

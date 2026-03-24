@@ -1,4 +1,4 @@
-# rtree
+# newtree
 
 A fast, colorful `tree` replacement with smart pattern filtering and a live-search TUI.
 
@@ -7,39 +7,39 @@ A fast, colorful `tree` replacement with smart pattern filtering and a live-sear
 The classic `tree` command's `-P` pattern filter is misleading — it still expands every directory, just showing zero matching files inside them:
 
 ```
-$ tree ~/Downloads -P "*.zip" -L 3
-/home/user/Downloads
-├── Amethyst
-│   ├── colmap_data
-│   │   ├── images
-│   │   └── sparse
+$ tree ~/project -P "*.rs" -L 3
+/home/user/project
+├── benches
+├── examples
+│   ├── basic
+│   └── advanced
 ...
-103 directories, 0 files
+47 directories, 0 files
 ```
 
-`rtree` prunes the tree to only show paths that actually lead to a match:
+`newtree` prunes the tree to only show paths that actually lead to a match:
 
 ```
-$ rtree ~/Downloads -P .zip -L 3
-Downloads
-├── packet_delivery_service
-│   ├── resources.zip
-├── Telegram Desktop
-│   ├── tmp
-│   │   ├── data.zip
-│   │   ├── matrices.zip
-│   ├── led_controller.zip
-├── Godot_v4.3-stable_linux.x86_64.zip
-├── linux.main.zip
+$ nt ~/project -P .rs -L 3
+project
+├── src
+│   ├── main.rs
+│   ├── lib.rs
+│   └── utils.rs
+├── benches
+│   └── bench.rs
+├── examples
+│   ├── basic.rs
+│   └── advanced.rs
 ...
-3 directories, 40 files
+6 directories, 12 files
 ```
 
 ## Install
 
 ```bash
 # AUR
-yay -S rtree
+yay -S newtree
 
 # From source
 cargo install --path .
@@ -48,7 +48,7 @@ cargo install --path .
 ## Usage
 
 ```
-rtree [OPTIONS] [PATH]
+nt [OPTIONS] [PATH]
 ```
 
 ### Listing options
@@ -84,13 +84,23 @@ rtree [OPTIONS] [PATH]
 | `-p` | Show permissions |
 | `-D` | Show last modified date |
 
+### Icons
+
+Nerd Font icons are shown by default when outputting to a terminal. Requires a [Nerd Font](https://www.nerdfonts.com/) in your terminal emulator.
+
+```bash
+nt                  # icons on by default in TTY
+nt --no-icons       # disable icons
+nt --icons          # force icons even when piped
+```
+
 ### Color
 
 ```bash
-rtree --color=always   # full file-type colors
-rtree --color=auto     # smart: detects piped output, busy flags (default)
-rtree --color=simple   # directories and symlinks only
-rtree --color=never    # no color
+nt --color=always   # full file-type colors
+nt --color=auto     # smart: detects piped output, busy flags (default)
+nt --color=simple   # directories and symlinks only
+nt --color=never    # no color
 ```
 
 `--color=auto` (the default) will:
@@ -101,10 +111,10 @@ rtree --color=never    # no color
 ### Output formats
 
 ```bash
-rtree --json    # JSON
-rtree --xml     # XML
-rtree --tui     # Interactive live-search TUI
-rtree --tui --search foo   # TUI with pre-filled search
+nt --json    # JSON
+nt --xml     # XML
+nt --tui     # Interactive live-search TUI
+nt --tui --search foo   # TUI with pre-filled search
 ```
 
 ## License
