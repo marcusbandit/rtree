@@ -19,6 +19,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -29,11 +31,26 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Install cargo-deb
-        run: cargo install cargo-deb
+      - name: Install cross-compilation tools (aarch64)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
 
-      - name: Build .deb package
-        run: cargo deb
+      - name: Set linker for aarch64
+        run: |
+          mkdir -p .cargo
+          echo '[target.aarch64-unknown-linux-gnu]' >> .cargo/config.toml
+          echo 'linker = "aarch64-linux-gnu-gcc"' >> .cargo/config.toml
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb --locked
+
+      - name: Build .deb packages (amd64 + arm64)
+        run: |
+          cargo build --release --locked --target x86_64-unknown-linux-gnu
+          cargo build --release --locked --target aarch64-unknown-linux-gnu
+          cargo deb --no-build --target x86_64-unknown-linux-gnu
+          cargo deb --no-build --target aarch64-unknown-linux-gnu
 
       - name: Import GPG signing key
         run: |
@@ -50,24 +67,27 @@ jobs:
             cd apt-repo && git checkout --orphan gh-pages
           fi
 
-      - name: Add package and rebuild repository index
+      - name: Add packages and rebuild repository index
         run: |
-          DEB=$(ls target/debian/*.deb | head -1)
-          FNAME=$(basename "$DEB")
-
           mkdir -p apt-repo/pool/main/
-          cp "$DEB" apt-repo/pool/main/
+          cp target/x86_64-unknown-linux-gnu/debian/*.deb  apt-repo/pool/main/
+          cp target/aarch64-unknown-linux-gnu/debian/*.deb apt-repo/pool/main/
 
           # Copy public key so users can fetch it
           cp KEY.gpg apt-repo/KEY.gpg
 
-          # Build Packages index
+          # Build per-arch Packages indices
           mkdir -p apt-repo/dists/stable/main/binary-amd64/
+          mkdir -p apt-repo/dists/stable/main/binary-arm64/
           cd apt-repo
-          dpkg-scanpackages pool/main/ /dev/null \
+          dpkg-scanpackages --arch amd64 pool/main/ /dev/null \
             > dists/stable/main/binary-amd64/Packages
           gzip -k -f dists/stable/main/binary-amd64/Packages
           bzip2 -k -f dists/stable/main/binary-amd64/Packages
+          dpkg-scanpackages --arch arm64 pool/main/ /dev/null \
+            > dists/stable/main/binary-arm64/Packages
+          gzip -k -f dists/stable/main/binary-arm64/Packages
+          bzip2 -k -f dists/stable/main/binary-arm64/Packages
 
           # Build Release file
           apt-ftparchive \
@@ -75,7 +95,7 @@ jobs:
             -o APT::FTPArchive::Release::Label="newtree" \
             -o APT::FTPArchive::Release::Suite="stable" \
             -o APT::FTPArchive::Release::Codename="stable" \
-            -o APT::FTPArchive::Release::Architectures="amd64" \
+            -o APT::FTPArchive::Release::Architectures="amd64 arm64" \
             -o APT::FTPArchive::Release::Components="main" \
             -o APT::FTPArchive::Release::Description="newtree apt repository" \
             release dists/stable/ > dists/stable/Release
