@@ -1,14 +1,14 @@
 Package: newtree
 Version: 0.2.0-1
-Architecture: amd64
+Architecture: arm64
 Maintainer: Marcus Bandit <marcusbanditten@gmail.com>
-Installed-Size: 3528
-Depends: libc6 (>= 2.39)
-Filename: pool/main/newtree_0.2.0-1_amd64.deb
-Size: 987276
-MD5sum: 2ba2297061c6283e1dcc3709c0d00186
-SHA1: 8cfd6734f05b474f0cbad8a77b7778c19bb2f996
-SHA256: 74c704f87c5095ed6460fc19bea43e94112347f9e12788448851975d54e29a94
+Installed-Size: 3162
+Depends: libc6:arm64 (>= 2.39)
+Filename: pool/main/newtree_0.2.0-1_arm64.deb
+Size: 843756
+MD5sum: e71b75596d65c5c708f9449e69bf922d
+SHA1: 5854e0e05ded09df46fc38785bb4d011eeea0f05
+SHA256: 5edc764c84376e4ac43a1766a1cbaacdf9ea44def6074b986c9af51b1c5194b0
 Section: utils
 Priority: optional
 Homepage: https://github.com/marcusbandit/newtree
